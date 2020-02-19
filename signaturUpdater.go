@@ -18,6 +18,22 @@ import (
 	"github.com/groob/plist"
 )
 
+type signature struct {
+	SignatureName     string `plist:"SignatureName"`
+	SignatureUniqueID string `plist:"SignatureUniqueId"`
+}
+
+type signatures []signature
+
+func (s signatures) contains(sig string) bool {
+	for i := range s {
+		if s[i].SignatureUniqueID == sig {
+			return true
+		}
+	}
+	return false
+}
+
 // Update ...
 func Update(workdir string, callback func(string) io.Reader) error {
 	if callback == nil {
@@ -48,10 +64,7 @@ func Update(workdir string, callback func(string) io.Reader) error {
 	}
 	plistDecoder := plist.NewDecoder(allSignaturesfile)
 
-	var allSignatures []struct {
-		SignatureName     string `plist:"SignatureName"`
-		SignatureUniqueID string `plist:"SignatureUniqueId"`
-	}
+	var allSignatures signatures
 
 	if plistDecoder.Decode(&allSignatures); err != nil {
 		return fmt.Errorf("Could not decode AllSignatures.plist: %v", err)
@@ -71,6 +84,23 @@ func Update(workdir string, callback func(string) io.Reader) error {
 
 	if err := runApplescript(`activate app "Mail"`, nil); err != nil {
 		updateErrors = multierror.Append(updateErrors, fmt.Errorf("Error start mail: %v", err))
+	}
+
+	out := bytes.NewBuffer(nil)
+	if err := runApplescript(fmt.Sprintf(`tell app "Finder" to get name of files of folder POSIX file "%s"`, signaturesPath), out); err != nil {
+		updateErrors = multierror.Append(updateErrors, fmt.Errorf("Error get signatures files: %v", err))
+	}
+
+	signaturesPathFiles := strings.Split(out.String(), ", ")
+
+	for i := range signaturesPathFiles {
+		file := strings.Trim(signaturesPathFiles[i], " \n")
+		if !strings.HasPrefix(file, ".mailsignature") || !allSignatures.contains(strings.TrimPrefix(file, ".mailsignature")) {
+			continue
+		}
+		if err := runApplescript(fmt.Sprintf(`tell app "Finder" to delete "%s" as POSIX file`, path.Join(signaturesPath, file)), nil); err != nil {
+			updateErrors = multierror.Append(updateErrors, fmt.Errorf("Error delete old signature file: %v", err))
+		}
 	}
 
 	return updateErrors
